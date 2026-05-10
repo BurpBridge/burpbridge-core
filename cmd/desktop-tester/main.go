@@ -2,75 +2,59 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	"burpbridge-core/pkg/engine"
+	"github.com/songgao/water"
 )
-
-type MockTun struct {
-	reader io.Reader
-	writer io.Writer
-	once   sync.Once
-	close  chan struct{}
-}
-
-func NewMockTun() *MockTun {
-	r, w := io.Pipe()
-	return &MockTun{
-		reader: r,
-		writer: w,
-		close:  make(chan struct{}),
-	}
-}
-
-func (m *MockTun) Read(p []byte) (n int, err error) {
-	select {
-	case <-m.close:
-		return 0, io.EOF
-	default:
-		return m.reader.Read(p)
-	}
-}
-
-func (m *MockTun) Write(p []byte) (n int, err error) {
-	select {
-	case <-m.close:
-		return 0, io.EOF
-	default:
-		return m.writer.Write(p)
-	}
-}
-
-func (m *MockTun) Close() error {
-	m.once.Do(func() {
-		close(m.close)
-	})
-	return nil
-}
 
 func main() {
 	fmt.Println("BurpBridge Desktop Tester")
 	fmt.Println("=========================")
 
-	tun := NewMockTun()
+	ifce, err := water.New(water.Config{
+		DeviceType: water.TUN,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create TUN interface: %v", err)
+	}
 
-	eng, err := engine.StartEngine(tun, "127.0.0.1:8080")
+	ifceName := ifce.Name()
+	fmt.Printf("Created TUN interface: %s\n", ifceName)
+
+	if err := runCommand("ifconfig", ifceName, "10.0.0.1", "netmask", "255.255.255.0", "up"); err != nil {
+		log.Printf("Warning: Failed to set IP: %v", err)
+	}
+
+	eng, err := engine.StartEngine(ifce, "127.0.0.1:8080")
 	if err != nil {
 		log.Fatalf("Failed to start engine: %v", err)
 	}
 
 	log.Println("Engine started, press Ctrl+C to stop")
+	log.Printf("Tunnel: %s -> Burp at 127.0.0.1:8080", ifceName)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
+	log.Println("Shutting down...")
 	eng.Stop()
-	tun.Close()
+
+	if err := ifce.Close(); err != nil {
+		log.Printf("Error closing TUN interface: %v", err)
+	}
+
 	log.Println("Shutdown complete")
+}
+
+func runCommand(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }

@@ -21,12 +21,20 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
+var packetBufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 65535)
+		return &buf
+	},
+}
+
 type Engine struct {
 	stack     *stack.Stack
 	link      *TunLinkEndpoint
 	proxyAddr string
 	ctx       context.Context
 	cancel    context.CancelFunc
+	wg        sync.WaitGroup
 }
 
 type TunLinkEndpoint struct {
@@ -52,31 +60,76 @@ func (e *TunLinkEndpoint) ReadPacket() (*stack.PacketBuffer, tcpip.NetworkProtoc
 		return nil, 0, io.EOF
 	}
 
+	if len(pkt) < 20 {
+		return nil, 0, fmt.Errorf("packet too small")
+	}
+
+	version := pkt[0] >> 4
+	var protoNum tcpip.NetworkProtocolNumber
+	if version == 4 {
+		protoNum = ipv4.ProtocolNumber
+	} else if version == 6 {
+		protoNum = ipv6.ProtocolNumber
+	} else {
+		return nil, 0, fmt.Errorf("unknown IP version: %d", version)
+	}
+
 	pb := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		ReserveHeaderBytes: 0,
 		Payload:            buffer.MakeWithData(pkt),
 	})
 
-	return pb, ipv4.ProtocolNumber, nil
+	return pb, protoNum, nil
 }
 
-func (e *TunLinkEndpoint) WritePacket(tcpip.NetworkProtocolNumber, tcpip.Address, tcpip.Address, *stack.PacketBuffer) error {
-	return nil
+func (e *TunLinkEndpoint) WritePacket(proto tcpip.NetworkProtocolNumber, localAddr, remoteAddr tcpip.Address, pb *stack.PacketBuffer) error {
+	if pb == nil {
+		return nil
+	}
+
+	data := pb.AsSlices()
+	if len(data) == 0 {
+		return nil
+	}
+
+	var buf []byte
+	for _, chunk := range data {
+		buf = append(buf, chunk...)
+	}
+
+	if len(buf) == 0 {
+		return nil
+	}
+
+	_, err := e.rwc.Write(buf)
+	if err != nil {
+		log.Printf("WritePacket error: %v", err)
+	}
+	return err
 }
 
 func (e *TunLinkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
 	e.dispatcher = dispatcher
 
 	go e.readLoop()
-	go e.dispatchLoop()
 }
 
 func (e *TunLinkEndpoint) readLoop() {
-	buf := make([]byte, 65535)
 	for {
+		bufPtr := packetBufferPool.Get().(*[]byte)
+		buf := *bufPtr
+		defer packetBufferPool.Put(bufPtr)
+
 		n, err := e.rwc.Read(buf)
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				log.Printf("TUN read error: %v", err)
+			}
 			return
+		}
+
+		if n == 0 {
+			continue
 		}
 
 		e.mu.Lock()
@@ -85,27 +138,15 @@ func (e *TunLinkEndpoint) readLoop() {
 			return
 		}
 
+		packet := make([]byte, n)
+		copy(packet, buf[:n])
+
 		select {
-		case e.inbound <- append([]byte{}, buf[:n]...):
+		case e.inbound <- packet:
 		default:
 			log.Println("inbound channel full, dropping packet")
 		}
 		e.mu.Unlock()
-	}
-}
-
-func (e *TunLinkEndpoint) dispatchLoop() {
-	for v := range e.inbound {
-		if e.dispatcher == nil {
-			continue
-		}
-
-		pb := stack.NewPacketBuffer(stack.PacketBufferOptions{
-			ReserveHeaderBytes: 0,
-			Payload:            buffer.MakeWithData(v),
-		})
-
-		e.dispatcher.DeliverNetworkPacket(ipv4.ProtocolNumber, pb)
 	}
 }
 
@@ -150,7 +191,13 @@ func (e *TunLinkEndpoint) IsAttached() bool {
 }
 
 func (e *TunLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
-	return 0, nil
+	var written int
+	for _, pb := range pkts.AsSlice() {
+		if err := e.WritePacket(pb.NetworkProtocolNumber, tcpip.Address{}, tcpip.Address{}, pb); err == nil {
+			written++
+		}
+	}
+	return written, nil
 }
 
 func (e *TunLinkEndpoint) Wait() {}
@@ -165,6 +212,7 @@ func (e *TunLinkEndpoint) Close() {
 type ForwarderHandler struct {
 	proxyAddr string
 	st        *stack.Stack
+	wg        *sync.WaitGroup
 }
 
 func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
@@ -188,11 +236,17 @@ func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
 
 	clientConn := gonet.NewTCPConn(queue, clientEp)
 
+	if h.wg != nil {
+		h.wg.Add(2)
+	}
 	go h.relayTCP(clientConn, proxyConn)
 	go h.relayTCP(proxyConn, clientConn)
 }
 
 func (h *ForwarderHandler) relayTCP(dst net.Conn, src net.Conn) {
+	if h.wg != nil {
+		defer h.wg.Done()
+	}
 	defer dst.Close()
 	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -217,6 +271,9 @@ func (h *ForwarderHandler) HandleUDP(r *udp.ForwarderRequest) bool {
 
 	udpConn := gonet.NewUDPConn(queue, ep)
 
+	if h.wg != nil {
+		h.wg.Add(2)
+	}
 	go h.relayUDP(proxyConn, udpConn)
 	go h.relayUDP(udpConn, proxyConn)
 
@@ -224,6 +281,9 @@ func (h *ForwarderHandler) HandleUDP(r *udp.ForwarderRequest) bool {
 }
 
 func (h *ForwarderHandler) relayUDP(dst net.Conn, src net.Conn) {
+	if h.wg != nil {
+		defer h.wg.Done()
+	}
 	defer dst.Close()
 	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -248,6 +308,8 @@ func StartEngine(rwc io.ReadWriteCloser, proxyAddr string) (*Engine, error) {
 		cancel()
 		return nil, fmt.Errorf("failed to initialize stack: %w", err)
 	}
+
+	engine.startDispatcher()
 
 	log.Printf("Engine started, proxying to %s", proxyAddr)
 	return engine, nil
@@ -291,7 +353,7 @@ func (e *Engine) initStack(rwc io.ReadWriteCloser) error {
 		},
 	})
 
-	tcpHandler := &ForwarderHandler{proxyAddr: e.proxyAddr, st: e.stack}
+	tcpHandler := &ForwarderHandler{proxyAddr: e.proxyAddr, st: e.stack, wg: &e.wg}
 	tcpFwd := tcp.NewForwarder(e.stack, 0, 1024, tcpHandler.HandleTCP)
 	e.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
@@ -301,11 +363,32 @@ func (e *Engine) initStack(rwc io.ReadWriteCloser) error {
 	return nil
 }
 
+func (e *Engine) startDispatcher() {
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		for {
+			pb, proto, err := e.link.ReadPacket()
+			if err != nil {
+				if !errors.Is(err, io.EOF) {
+					log.Printf("ReadPacket error: %v", err)
+				}
+				return
+			}
+
+			if e.link.dispatcher != nil {
+				e.link.dispatcher.DeliverNetworkPacket(proto, pb)
+			}
+		}
+	}()
+}
+
 func (e *Engine) Stop() error {
 	e.cancel()
 	if e.link != nil {
 		e.link.Close()
 	}
+	e.wg.Wait()
 	if e.stack != nil {
 		e.stack.Close()
 	}
