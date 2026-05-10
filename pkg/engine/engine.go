@@ -60,6 +60,17 @@ func (e *TunLinkEndpoint) ReadPacket() (*stack.PacketBuffer, tcpip.NetworkProtoc
 		return nil, 0, io.EOF
 	}
 
+	// Handle macOS AF header (4 bytes): 0x00 0x00 0x00 0x02 for IPv4
+	// The water library on macOS includes this AF header
+	if len(pkt) >= 4 {
+		af := uint32(pkt[0])<<24 | uint32(pkt[1])<<16 | uint32(pkt[2])<<8 | uint32(pkt[3])
+		if af == 2 {
+			// IPv4 AF header detected, strip it
+			log.Printf("[Ingest] Stripped macOS AF header, %d -> %d bytes", len(pkt), len(pkt)-4)
+			pkt = pkt[4:]
+		}
+	}
+
 	if len(pkt) < 20 {
 		return nil, 0, fmt.Errorf("packet too small")
 	}
@@ -101,6 +112,14 @@ func (e *TunLinkEndpoint) WritePacket(proto tcpip.NetworkProtocolNumber, localAd
 		return nil
 	}
 
+	// Prepend macOS AF header for IPv4 (0x00 0x00 0x00 0x02)
+	// This tells macOS the packet is IPv4
+	if len(buf) >= 1 && (buf[0]>>4) == 4 {
+		header := []byte{0x00, 0x00, 0x00, 0x02}
+		buf = append(header, buf...)
+		log.Printf("[Egress] Added macOS AF header, %d -> %d bytes", len(buf)-4, len(buf))
+	}
+
 	_, err := e.rwc.Write(buf)
 	if err != nil {
 		log.Printf("WritePacket error: %v", err)
@@ -140,6 +159,13 @@ func (e *TunLinkEndpoint) readLoop() {
 
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
+
+		// Hex dump for diagnostics
+		dumpLen := 20
+		if dumpLen > n {
+			dumpLen = n
+		}
+		log.Printf("[Ingest] Hex Dump: %X", packet[:dumpLen])
 
 		select {
 		case e.inbound <- packet:
@@ -354,10 +380,15 @@ func (e *Engine) initStack(rwc io.ReadWriteCloser) error {
 	e.stack.AddProtocolAddress(nicID, ipv4Addr, stack.AddressProperties{})
 	e.stack.AddProtocolAddress(nicID, ipv6Addr, stack.AddressProperties{})
 
+	// Enable promiscuous mode to accept ALL packets regardless of destination IP
+	if err := e.stack.SetPromiscuousMode(nicID, true); err != nil {
+		log.Printf("Warning: SetPromiscuousMode failed: %v", err)
+	}
+
+	// Set default catch-all route using IPv4EmptySubnet
 	e.stack.SetRouteTable([]tcpip.Route{
 		{
-			Destination: tcpip.Subnet{},
-			Gateway:     zeroAddr,
+			Destination: header.IPv4EmptySubnet,
 			NIC:         nicID,
 		},
 	})
