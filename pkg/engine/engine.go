@@ -87,7 +87,7 @@ func (e *TunLinkEndpoint) ReadPacket() (*stack.PacketBuffer, tcpip.NetworkProtoc
 	return pb, protoNum, nil
 }
 
-func (e *TunLinkEndpoint) WritePacket(proto tcpip.NetworkProtocolNumber, localAddr, remoteAddr tcpip.Address, pb *stack.PacketBuffer) error {
+func (e *TunLinkEndpoint) WritePacket(proto tcpip.NetworkProtocolNumber, _, _ tcpip.Address, pb *stack.PacketBuffer) error {
 	if pb == nil {
 		return nil
 	}
@@ -178,15 +178,15 @@ func (e *TunLinkEndpoint) ARPHardwareType() header.ARPHardwareType {
 	return header.ARPHardwareNone
 }
 
-func (e *TunLinkEndpoint) AddHeader(pkt *stack.PacketBuffer) {}
+func (e *TunLinkEndpoint) AddHeader(_ *stack.PacketBuffer) {}
 
-func (e *TunLinkEndpoint) ParseHeader(pkt *stack.PacketBuffer) bool {
+func (e *TunLinkEndpoint) ParseHeader(_ *stack.PacketBuffer) bool {
 	return true
 }
 
-func (e *TunLinkEndpoint) SetOnCloseAction(func()) {}
+func (e *TunLinkEndpoint) SetOnCloseAction(_ func()) {}
 
-func (e *TunLinkEndpoint) SetMTU(mtu uint32) {}
+func (e *TunLinkEndpoint) SetMTU(_ uint32) {}
 
 func (e *TunLinkEndpoint) MaxHeaderLength() uint16 {
 	return 0
@@ -196,7 +196,7 @@ func (e *TunLinkEndpoint) LinkAddress() tcpip.LinkAddress {
 	return ""
 }
 
-func (e *TunLinkEndpoint) SetLinkAddress(addr tcpip.LinkAddress) {}
+func (e *TunLinkEndpoint) SetLinkAddress(_ tcpip.LinkAddress) {}
 
 func (e *TunLinkEndpoint) IsAttached() bool {
 	return e.dispatcher != nil
@@ -223,7 +223,6 @@ func (e *TunLinkEndpoint) Close() {
 
 type ForwarderHandler struct {
 	proxyAddr string
-	st        *stack.Stack
 	wg        *sync.WaitGroup
 }
 
@@ -416,7 +415,7 @@ func (e *Engine) initStack(rwc io.ReadWriteCloser) error {
 		},
 	})
 
-	tcpHandler := &ForwarderHandler{proxyAddr: e.proxyAddr, st: e.stack, wg: &e.wg}
+	tcpHandler := &ForwarderHandler{proxyAddr: e.proxyAddr, wg: &e.wg}
 	tcpFwd := tcp.NewForwarder(e.stack, 0, 1024, tcpHandler.HandleTCP)
 	e.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
