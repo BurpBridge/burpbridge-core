@@ -112,14 +112,7 @@ func (e *TunLinkEndpoint) WritePacket(proto tcpip.NetworkProtocolNumber, localAd
 		return nil
 	}
 
-	// Prepend macOS AF header for IPv4 (0x00 0x00 0x00 0x02)
-	// This tells macOS the packet is IPv4
-	if len(buf) >= 1 && (buf[0]>>4) == 4 {
-		header := []byte{0x00, 0x00, 0x00, 0x02}
-		buf = append(header, buf...)
-		log.Printf("[Egress] Added macOS AF header, %d -> %d bytes", len(buf)-4, len(buf))
-	}
-
+	// Write pure IP packet directly - water library handles macOS AF header
 	_, err := e.rwc.Write(buf)
 	if err != nil {
 		log.Printf("WritePacket error: %v", err)
