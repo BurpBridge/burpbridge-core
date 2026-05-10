@@ -386,6 +386,12 @@ func (e *Engine) initStack(rwc io.ReadWriteCloser) error {
 		log.Printf("Warning: SetPromiscuousMode failed: %v", err)
 	}
 
+	// Enable IP spoofing - allows sending packets with ANY source IP (spoofed)
+	// This is critical for transparent proxy - we reply as the destination server
+	if err := e.stack.SetSpoofing(nicID, true); err != nil {
+		log.Printf("Warning: SetSpoofing failed: %v", err)
+	}
+
 	// Set default catch-all route using IPv4EmptySubnet
 	e.stack.SetRouteTable([]tcpip.Route{
 		{
