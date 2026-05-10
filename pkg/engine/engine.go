@@ -21,13 +21,6 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-var packetBufferPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 65535)
-		return &buf
-	},
-}
-
 type Engine struct {
 	stack     *stack.Stack
 	link      *TunLinkEndpoint
@@ -77,11 +70,12 @@ func (e *TunLinkEndpoint) ReadPacket() (*stack.PacketBuffer, tcpip.NetworkProtoc
 
 	version := pkt[0] >> 4
 	var protoNum tcpip.NetworkProtocolNumber
-	if version == 4 {
+	switch version {
+	case 4:
 		protoNum = ipv4.ProtocolNumber
-	} else if version == 6 {
+	case 6:
 		protoNum = ipv6.ProtocolNumber
-	} else {
+	default:
 		return nil, 0, fmt.Errorf("unknown IP version: %d", version)
 	}
 
@@ -127,11 +121,10 @@ func (e *TunLinkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
 }
 
 func (e *TunLinkEndpoint) readLoop() {
-	for {
-		bufPtr := packetBufferPool.Get().(*[]byte)
-		buf := *bufPtr
-		defer packetBufferPool.Put(bufPtr)
+	// Allocate ONE reusable buffer for the lifetime of the loop
+	buf := make([]byte, 65535)
 
+	for {
 		n, err := e.rwc.Read(buf)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
@@ -153,12 +146,12 @@ func (e *TunLinkEndpoint) readLoop() {
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
 
-		// Hex dump for diagnostics
-		dumpLen := 20
-		if dumpLen > n {
-			dumpLen = n
-		}
-		log.Printf("[Ingest] Hex Dump: %X", packet[:dumpLen])
+		// Hex dump for diagnostics (commented out after routing verified)
+		// dumpLen := 20
+		// if dumpLen > n {
+		// 	dumpLen = n
+		// }
+		// log.Printf("[Ingest] Hex Dump: %X", packet[:dumpLen])
 
 		select {
 		case e.inbound <- packet:
@@ -261,6 +254,17 @@ func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
 
 	clientConn := gonet.NewTCPConn(queue, clientEp)
 
+	defer func() {
+		proxyConnErr := proxyConn.Close()
+		if proxyConnErr != nil {
+			return
+		}
+		clientConnErr := clientConn.Close()
+		if clientConnErr != nil {
+			return
+		}
+	}()
+
 	if h.wg != nil {
 		h.wg.Add(2)
 	}
@@ -272,7 +276,11 @@ func (h *ForwarderHandler) relayTCP(dst net.Conn, src net.Conn, direction string
 	if h.wg != nil {
 		defer h.wg.Done()
 	}
-	defer dst.Close()
+	defer func() {
+		if err := dst.Close(); err != nil {
+			log.Printf("[Relay] Error closing connection: %v", err)
+		}
+	}()
 	buf := make([]byte, 4096)
 	n, err := io.CopyBuffer(dst, src, buf)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -299,6 +307,17 @@ func (h *ForwarderHandler) HandleUDP(r *udp.ForwarderRequest) bool {
 
 	udpConn := gonet.NewUDPConn(queue, ep)
 
+	defer func() {
+		proxyConnErr := proxyConn.Close()
+		if proxyConnErr != nil {
+			return
+		}
+		udpConnErr := udpConn.Close()
+		if udpConnErr != nil {
+			return
+		}
+	}()
+
 	if h.wg != nil {
 		h.wg.Add(2)
 	}
@@ -312,7 +331,11 @@ func (h *ForwarderHandler) relayUDP(dst net.Conn, src net.Conn) {
 	if h.wg != nil {
 		defer h.wg.Done()
 	}
-	defer dst.Close()
+	defer func() {
+		if err := dst.Close(); err != nil {
+			log.Printf("UDP relay error closing connection: %v", err)
+		}
+	}()
 	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
 	if err != nil && !errors.Is(err, io.EOF) {
 		log.Printf("UDP relay error: %v", err)
@@ -434,6 +457,8 @@ func (e *Engine) startDispatcher() {
 			if e.link.dispatcher != nil {
 				e.link.dispatcher.DeliverNetworkPacket(proto, pb)
 			}
+			// CRITICAL: Tell gVisor we are done with the packet to prevent memory leaks
+			pb.DecRef()
 		}
 	}()
 }
