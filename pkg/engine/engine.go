@@ -216,21 +216,27 @@ type ForwarderHandler struct {
 }
 
 func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
+	id := r.ID()
+	log.Printf("[TCP] Intercepted connection from %s:%d intended for %s:%d",
+		id.RemoteAddress.String(), id.RemotePort, id.LocalAddress.String(), id.LocalPort)
+
 	queue := &waiter.Queue{}
 	clientEp, err := r.CreateEndpoint(queue)
 	if err != nil {
-		log.Printf("Failed to create endpoint: %v", err)
+		log.Printf("[TCP] Failed to create endpoint: %v", err)
 		r.Complete(true)
 		return
 	}
 
+	log.Printf("[Relay] Dialing Burp at %s...", h.proxyAddr)
 	proxyConn, dialErr := net.Dial("tcp", h.proxyAddr)
 	if dialErr != nil {
-		log.Printf("Failed to connect to proxy %s: %v", h.proxyAddr, dialErr)
+		log.Printf("[Relay] Failed to connect to proxy %s: %v", h.proxyAddr, dialErr)
 		clientEp.Close()
 		r.Complete(true)
 		return
 	}
+	log.Printf("[Relay] Dial to Burp SUCCESS")
 
 	r.Complete(false)
 
@@ -239,18 +245,21 @@ func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
 	if h.wg != nil {
 		h.wg.Add(2)
 	}
-	go h.relayTCP(clientConn, proxyConn)
-	go h.relayTCP(proxyConn, clientConn)
+	go h.relayTCP(clientConn, proxyConn, "Client->Burp")
+	go h.relayTCP(proxyConn, clientConn, "Burp->Client")
 }
 
-func (h *ForwarderHandler) relayTCP(dst net.Conn, src net.Conn) {
+func (h *ForwarderHandler) relayTCP(dst net.Conn, src net.Conn, direction string) {
 	if h.wg != nil {
 		defer h.wg.Done()
 	}
 	defer dst.Close()
-	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
+	buf := make([]byte, 4096)
+	n, err := io.CopyBuffer(dst, src, buf)
 	if err != nil && !errors.Is(err, io.EOF) {
-		log.Printf("Relay error: %v", err)
+		log.Printf("[Relay] %s error after %d bytes: %v", direction, n, err)
+	} else {
+		log.Printf("[Relay] %s closed. Bytes: %d, err: %v", direction, n, err)
 	}
 }
 
@@ -371,9 +380,24 @@ func (e *Engine) startDispatcher() {
 			pb, proto, err := e.link.ReadPacket()
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
-					log.Printf("ReadPacket error: %v", err)
+					log.Printf("[Ingest] ReadPacket error: %v", err)
 				}
 				return
+			}
+
+			// Log packet info - extract IP header for logging
+			if data := pb.AsSlices(); len(data) > 0 {
+				var srcIP, dstIP string
+				if proto == ipv4.ProtocolNumber && len(data[0]) >= 20 {
+					hdr := header.IPv4(data[0])
+					srcIP = hdr.SourceAddress().String()
+					dstIP = hdr.DestinationAddress().String()
+				} else if proto == ipv6.ProtocolNumber && len(data[0]) >= 40 {
+					hdr := header.IPv6(data[0])
+					srcIP = hdr.SourceAddress().String()
+					dstIP = hdr.DestinationAddress().String()
+				}
+				log.Printf("[Ingest] Raw Packet Read: %d bytes, proto=%v, %s -> %s", pb.Size(), proto, srcIP, dstIP)
 			}
 
 			if e.link.dispatcher != nil {
