@@ -11,11 +11,14 @@ import (
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+	"gvisor.dev/gvisor/pkg/waiter"
 )
 
 type Engine struct {
@@ -32,32 +35,32 @@ type TunLinkEndpoint struct {
 	mu     sync.Mutex
 	closed bool
 
-	inbound    chan buffer.View
+	inbound    chan []byte
 	dispatcher stack.NetworkDispatcher
 }
 
 func NewTunLinkEndpoint(rwc io.ReadWriteCloser) *TunLinkEndpoint {
 	return &TunLinkEndpoint{
 		rwc:     rwc,
-		inbound: make(chan buffer.View, 256),
+		inbound: make(chan []byte, 256),
 	}
 }
 
-func (e *TunLinkEndpoint) ReadPacket() (stack.PacketBufferPtr, tcpip.NetworkProtocolNumber, error) {
+func (e *TunLinkEndpoint) ReadPacket() (*stack.PacketBuffer, tcpip.NetworkProtocolNumber, error) {
 	pkt, ok := <-e.inbound
 	if !ok {
-		return stack.PacketBufferPtr{}, 0, io.EOF
+		return nil, 0, io.EOF
 	}
 
 	pb := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		ReserveHeaderSpace: 0,
+		ReserveHeaderBytes: 0,
+		Payload:            buffer.MakeWithData(pkt),
 	})
-	pb.Write(pkt)
 
 	return pb, ipv4.ProtocolNumber, nil
 }
 
-func (e *TunLinkEndpoint) WritePacket(tcpip.NetworkProtocolNumber, tcpip.Address, tcpip.Address, stack.PacketBufferPtr) error {
+func (e *TunLinkEndpoint) WritePacket(tcpip.NetworkProtocolNumber, tcpip.Address, tcpip.Address, *stack.PacketBuffer) error {
 	return nil
 }
 
@@ -83,7 +86,7 @@ func (e *TunLinkEndpoint) readLoop() {
 		}
 
 		select {
-		case e.inbound <- buffer.NewViewFromSlice(buf[:n]):
+		case e.inbound <- append([]byte{}, buf[:n]...):
 		default:
 			log.Println("inbound channel full, dropping packet")
 		}
@@ -98,11 +101,11 @@ func (e *TunLinkEndpoint) dispatchLoop() {
 		}
 
 		pb := stack.NewPacketBuffer(stack.PacketBufferOptions{
-			ReserveHeaderSpace: 0,
+			ReserveHeaderBytes: 0,
+			Payload:            buffer.MakeWithData(v),
 		})
-		pb.Write(v)
 
-		e.dispatcher.DeliverNetworkPacket("", ipv4.ProtocolNumber, pb)
+		e.dispatcher.DeliverNetworkPacket(ipv4.ProtocolNumber, pb)
 	}
 }
 
@@ -118,6 +121,38 @@ func (e *TunLinkEndpoint) Capabilities() stack.LinkEndpointCapabilities {
 	return stack.CapabilityNone
 }
 
+func (e *TunLinkEndpoint) ARPHardwareType() header.ARPHardwareType {
+	return header.ARPHardwareNone
+}
+
+func (e *TunLinkEndpoint) AddHeader(pkt *stack.PacketBuffer) {}
+
+func (e *TunLinkEndpoint) ParseHeader(pkt *stack.PacketBuffer) bool {
+	return true
+}
+
+func (e *TunLinkEndpoint) SetOnCloseAction(func()) {}
+
+func (e *TunLinkEndpoint) SetMTU(mtu uint32) {}
+
+func (e *TunLinkEndpoint) MaxHeaderLength() uint16 {
+	return 0
+}
+
+func (e *TunLinkEndpoint) LinkAddress() tcpip.LinkAddress {
+	return ""
+}
+
+func (e *TunLinkEndpoint) SetLinkAddress(addr tcpip.LinkAddress) {}
+
+func (e *TunLinkEndpoint) IsAttached() bool {
+	return e.dispatcher != nil
+}
+
+func (e *TunLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
+	return 0, nil
+}
+
 func (e *TunLinkEndpoint) Wait() {}
 
 func (e *TunLinkEndpoint) Close() {
@@ -129,26 +164,35 @@ func (e *TunLinkEndpoint) Close() {
 
 type ForwarderHandler struct {
 	proxyAddr string
+	st        *stack.Stack
 }
 
 func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
-	clientEp := r.CreateEndpoint()
-
-	proxyConn, err := net.Dial("tcp", h.proxyAddr)
+	queue := &waiter.Queue{}
+	clientEp, err := r.CreateEndpoint(queue)
 	if err != nil {
-		log.Printf("Failed to connect to proxy %s: %v", h.proxyAddr, err)
-		clientEp.Close()
-		r.CompleteHijack(nil)
+		log.Printf("Failed to create endpoint: %v", err)
+		r.Complete(true)
 		return
 	}
 
-	r.CompleteHijack(nil)
+	proxyConn, dialErr := net.Dial("tcp", h.proxyAddr)
+	if dialErr != nil {
+		log.Printf("Failed to connect to proxy %s: %v", h.proxyAddr, dialErr)
+		clientEp.Close()
+		r.Complete(true)
+		return
+	}
 
-	go h.relayTCP(clientEp, proxyConn)
-	go h.relayTCP(proxyConn, clientEp)
+	r.Complete(false)
+
+	clientConn := gonet.NewTCPConn(queue, clientEp)
+
+	go h.relayTCP(clientConn, proxyConn)
+	go h.relayTCP(proxyConn, clientConn)
 }
 
-func (h *ForwarderHandler) relayTCP(dst io.Writer, src io.ReadCloser) {
+func (h *ForwarderHandler) relayTCP(dst net.Conn, src net.Conn) {
 	defer dst.Close()
 	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -156,24 +200,30 @@ func (h *ForwarderHandler) relayTCP(dst io.Writer, src io.ReadCloser) {
 	}
 }
 
-func (h *ForwarderHandler) HandleUDP(e *udp.ForwarderRequest) {
-	ep := e.CreateEndpoint()
-
-	proxyConn, err := net.Dial("udp", h.proxyAddr)
+func (h *ForwarderHandler) HandleUDP(r *udp.ForwarderRequest) bool {
+	queue := &waiter.Queue{}
+	ep, err := r.CreateEndpoint(queue)
 	if err != nil {
-		log.Printf("Failed to connect to UDP proxy %s: %v", h.proxyAddr, err)
-		ep.Close()
-		e.CompleteHijack(nil)
-		return
+		log.Printf("Failed to create UDP endpoint: %v", err)
+		return false
 	}
 
-	e.CompleteHijack(nil)
+	proxyConn, dialErr := net.Dial("udp", h.proxyAddr)
+	if dialErr != nil {
+		log.Printf("Failed to connect to UDP proxy %s: %v", h.proxyAddr, dialErr)
+		ep.Close()
+		return false
+	}
 
-	go h.relayUDP(proxyConn, ep)
-	go h.relayUDP(ep, proxyConn)
+	udpConn := gonet.NewUDPConn(queue, ep)
+
+	go h.relayUDP(proxyConn, udpConn)
+	go h.relayUDP(udpConn, proxyConn)
+
+	return true
 }
 
-func (h *ForwarderHandler) relayUDP(dst io.Writer, src io.ReadCloser) {
+func (h *ForwarderHandler) relayUDP(dst net.Conn, src net.Conn) {
 	defer dst.Close()
 	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -216,27 +266,37 @@ func (e *Engine) initStack(rwc io.ReadWriteCloser) error {
 	})
 
 	e.link = NewTunLinkEndpoint(rwc)
-	nicID := e.stack.AddNIC(e.link, "burpbridge")
+	nicID := tcpip.NICID(1)
+	if err := e.stack.CreateNIC(nicID, e.link); err != nil {
+		return fmt.Errorf("failed to create NIC: %v", err)
+	}
+
+	zeroAddr := tcpip.Address{}
+	ipv4Addr := tcpip.ProtocolAddress{
+		Protocol:          ipv4.ProtocolNumber,
+		AddressWithPrefix: tcpip.AddressWithPrefix{Address: zeroAddr, PrefixLen: 0},
+	}
+	ipv6Addr := tcpip.ProtocolAddress{
+		Protocol:          ipv6.ProtocolNumber,
+		AddressWithPrefix: tcpip.AddressWithPrefix{Address: zeroAddr, PrefixLen: 0},
+	}
+	e.stack.AddProtocolAddress(nicID, ipv4Addr, stack.AddressProperties{})
+	e.stack.AddProtocolAddress(nicID, ipv6Addr, stack.AddressProperties{})
 
 	e.stack.SetRouteTable([]tcpip.Route{
 		{
-			Destination: tcpip.Address(net.ParseIP("0.0.0.0").To4()),
-			Gateway:     "",
-			NIC:         nicID,
-		},
-		{
-			Destination: tcpip.Address(net.ParseIP("::").To16()),
-			Gateway:     "",
+			Destination: tcpip.Subnet{},
+			Gateway:     zeroAddr,
 			NIC:         nicID,
 		},
 	})
 
-	tcpHandler := &ForwarderHandler{proxyAddr: e.proxyAddr}
+	tcpHandler := &ForwarderHandler{proxyAddr: e.proxyAddr, st: e.stack}
 	tcpFwd := tcp.NewForwarder(e.stack, 0, 1024, tcpHandler.HandleTCP)
-	e.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd)
+	e.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
 	udpFwd := udp.NewForwarder(e.stack, tcpHandler.HandleUDP)
-	e.stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd)
+	e.stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 
 	return nil
 }
