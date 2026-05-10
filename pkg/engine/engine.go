@@ -2,12 +2,12 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"sync"
-	"unsafe"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -132,13 +132,53 @@ type ForwarderHandler struct {
 }
 
 func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
+	clientEp := r.CreateEndpoint()
+
+	proxyConn, err := net.Dial("tcp", h.proxyAddr)
+	if err != nil {
+		log.Printf("Failed to connect to proxy %s: %v", h.proxyAddr, err)
+		clientEp.Close()
+		r.CompleteHijack(nil)
+		return
+	}
+
 	r.CompleteHijack(nil)
-	log.Printf("TCP connection hijacked, would forward to %s", h.proxyAddr)
+
+	go h.relayTCP(clientEp, proxyConn)
+	go h.relayTCP(proxyConn, clientEp)
+}
+
+func (h *ForwarderHandler) relayTCP(dst io.Writer, src io.ReadCloser) {
+	defer dst.Close()
+	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
+	if err != nil && !errors.Is(err, io.EOF) {
+		log.Printf("Relay error: %v", err)
+	}
 }
 
 func (h *ForwarderHandler) HandleUDP(e *udp.ForwarderRequest) {
+	ep := e.CreateEndpoint()
+
+	proxyConn, err := net.Dial("udp", h.proxyAddr)
+	if err != nil {
+		log.Printf("Failed to connect to UDP proxy %s: %v", h.proxyAddr, err)
+		ep.Close()
+		e.CompleteHijack(nil)
+		return
+	}
+
 	e.CompleteHijack(nil)
-	log.Printf("UDP packet hijacked, would forward to %s", h.proxyAddr)
+
+	go h.relayUDP(proxyConn, ep)
+	go h.relayUDP(ep, proxyConn)
+}
+
+func (h *ForwarderHandler) relayUDP(dst io.Writer, src io.ReadCloser) {
+	defer dst.Close()
+	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
+	if err != nil && !errors.Is(err, io.EOF) {
+		log.Printf("UDP relay error: %v", err)
+	}
 }
 
 func StartEngine(rwc io.ReadWriteCloser, proxyAddr string) (*Engine, error) {
