@@ -368,14 +368,15 @@ func (e *Engine) initStack(rwc io.ReadWriteCloser) error {
 		return fmt.Errorf("failed to create NIC: %v", err)
 	}
 
-	zeroAddr := tcpip.Address{}
+	// Assign virtual IP 10.0.0.2/24 to gVisor NIC so it has an identity
+	localIP := tcpip.AddrFrom4([4]byte{10, 0, 0, 2})
 	ipv4Addr := tcpip.ProtocolAddress{
 		Protocol:          ipv4.ProtocolNumber,
-		AddressWithPrefix: tcpip.AddressWithPrefix{Address: zeroAddr, PrefixLen: 0},
+		AddressWithPrefix: tcpip.AddressWithPrefix{Address: localIP, PrefixLen: 24},
 	}
 	ipv6Addr := tcpip.ProtocolAddress{
 		Protocol:          ipv6.ProtocolNumber,
-		AddressWithPrefix: tcpip.AddressWithPrefix{Address: zeroAddr, PrefixLen: 0},
+		AddressWithPrefix: tcpip.AddressWithPrefix{Address: tcpip.Address{}, PrefixLen: 0},
 	}
 	e.stack.AddProtocolAddress(nicID, ipv4Addr, stack.AddressProperties{})
 	e.stack.AddProtocolAddress(nicID, ipv6Addr, stack.AddressProperties{})
