@@ -235,7 +235,7 @@ func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
 	clientEp, err := r.CreateEndpoint(queue)
 	if err != nil {
 		log.Printf("[TCP] Failed to create endpoint: %v", err)
-		r.Complete(true)
+		r.Complete(false)
 		return
 	}
 
@@ -244,12 +244,12 @@ func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
 	if dialErr != nil {
 		log.Printf("[Relay] Failed to connect to proxy %s: %v", h.proxyAddr, dialErr)
 		clientEp.Close()
-		r.Complete(true)
+		r.Complete(false)
 		return
 	}
 	log.Printf("[Relay] Dial to Burp SUCCESS")
 
-	r.Complete(false)
+	r.Complete(true)
 
 	clientConn := gonet.NewTCPConn(queue, clientEp)
 

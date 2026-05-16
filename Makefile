@@ -2,14 +2,14 @@
 
 help:
 	@echo "BurpBridge Build System"
-	@echo "======================"
+	@echo "\033[0;32m======================\033[0m"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  setup          - Install gomobile and dependencies (first-time only)"
-	@echo "  build          - Build both Android and iOS libraries"
-	@echo "  build-android - Build Android .aar library"
-	@echo "  build-ios     - Build iOS .xcframework library"
-	@echo "  clean          - Remove build artifacts"
+	@echo "  \033[0;34msetup\033[0m          - Install gomobile and dependencies (first-time only)"
+	@echo "  \033[0;34mbuild\033[0m          - Build both Android and iOS libraries"
+	@echo "  \033[0;34mbuild-android\033[0m - Build Android .aar library"
+	@echo "  \033[0;34mbuild-ios\033[0m     - Build iOS .xcframework library"
+	@echo "  \033[0;34mclean\033[0m          - Remove build artifacts"
 	@echo ""
 	@echo "Prerequisites:"
 	@echo "  - Go 1.25+"
@@ -19,14 +19,14 @@ help:
 	@echo ""
 
 setup:
-	@echo "Installing gomobile..."
+	@echo "\033[0;34mInstalling gomobile...\033[0m"
 	go install golang.org/x/mobile/cmd/gomobile@latest
-	@echo "Getting mobile bind package..."
+	@echo "\033[0;34mGetting mobile bind package...\033[0m"
 	go get golang.org/x/mobile/bind
-	@echo "Initializing gomobile..."
+	@echo "\033[0;34mInitializing gomobile...\033[0m"
 	gomobile init
 	@echo ""
-	@echo "Setup complete! Run 'make build' to build the libraries."
+	@echo "\033[0;32mSetup complete! Run 'make build' to build the libraries.\033[0m"
 
 build: build-android build-ios
 	@echo ""
