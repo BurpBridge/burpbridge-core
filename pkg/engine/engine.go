@@ -290,55 +290,8 @@ func (h *ForwarderHandler) relayTCP(dst net.Conn, src net.Conn, direction string
 }
 
 func (h *ForwarderHandler) HandleUDP(r *udp.ForwarderRequest) bool {
-	queue := &waiter.Queue{}
-	ep, err := r.CreateEndpoint(queue)
-	if err != nil {
-		log.Printf("Failed to create UDP endpoint: %v", err)
-		return false
-	}
-
-	proxyConn, dialErr := net.Dial("udp", h.proxyAddr)
-	if dialErr != nil {
-		log.Printf("Failed to connect to UDP proxy %s: %v", h.proxyAddr, dialErr)
-		ep.Close()
-		return false
-	}
-
-	udpConn := gonet.NewUDPConn(queue, ep)
-
-	defer func() {
-		proxyConnErr := proxyConn.Close()
-		if proxyConnErr != nil {
-			return
-		}
-		udpConnErr := udpConn.Close()
-		if udpConnErr != nil {
-			return
-		}
-	}()
-
-	if h.wg != nil {
-		h.wg.Add(2)
-	}
-	go h.relayUDP(proxyConn, udpConn)
-	go h.relayUDP(udpConn, proxyConn)
-
-	return true
-}
-
-func (h *ForwarderHandler) relayUDP(dst net.Conn, src net.Conn) {
-	if h.wg != nil {
-		defer h.wg.Done()
-	}
-	defer func() {
-		if err := dst.Close(); err != nil {
-			log.Printf("UDP relay error closing connection: %v", err)
-		}
-	}()
-	_, err := io.CopyBuffer(dst, src, make([]byte, 4096))
-	if err != nil && !errors.Is(err, io.EOF) {
-		log.Printf("UDP relay error: %v", err)
-	}
+	log.Printf("[UDP] Dropping packet - Burp Suite does not support UDP")
+	return false
 }
 
 func StartEngine(rwc io.ReadWriteCloser, proxyAddr string) (*Engine, error) {
