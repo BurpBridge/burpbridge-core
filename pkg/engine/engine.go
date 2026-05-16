@@ -228,41 +228,50 @@ type ForwarderHandler struct {
 
 func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
-	log.Printf("[TCP] Intercepted connection from %s:%d intended for %s:%d",
-		id.RemoteAddress.String(), id.RemotePort, id.LocalAddress.String(), id.LocalPort)
 
-	queue := &waiter.Queue{}
-	clientEp, err := r.CreateEndpoint(queue)
-	if err != nil {
-		log.Printf("[TCP] Failed to create endpoint: %v", err)
+	// 1. Drop Android background noise (only accept HTTP and HTTPS)
+	if id.LocalPort != 80 && id.LocalPort != 443 {
 		r.Complete(false)
 		return
 	}
 
-	log.Printf("[Relay] Dialing Burp at %s...", h.proxyAddr)
-	proxyConn, dialErr := net.Dial("tcp", h.proxyAddr)
-	if dialErr != nil {
-		log.Printf("[Relay] Failed to connect to proxy %s: %v", h.proxyAddr, dialErr)
-		clientEp.Close()
+	log.Printf("[TCP] Intercepted connection intended for %s:%d", id.LocalAddress.String(), id.LocalPort)
+
+	// 2. Parse the base IP from the proxy string (e.g., "10.102.68.154:8080" -> "10.102.68.154")
+	host, _, err := net.SplitHostPort(h.proxyAddr)
+	if err != nil {
+		host = h.proxyAddr // Fallback just in case
+	}
+
+	// 3. Route to the correct Burp listener
+	var targetProxy string
+	if id.LocalPort == 80 {
+		targetProxy = net.JoinHostPort(host, "8080") // Plain HTTP
+	} else {
+		targetProxy = net.JoinHostPort(host, "8443") // HTTPS
+	}
+
+	queue := &waiter.Queue{}
+	clientEp, epErr := r.CreateEndpoint(queue) // Changed to epErr
+	if epErr != nil {
 		r.Complete(false)
+		return
+	}
+
+	// CRITICAL FIX: Tell gVisor to ACCEPT the connection immediately!
+	// The agent deleted this. Without it, the engine commits suicide.
+	r.Complete(true)
+
+	log.Printf("[Relay] Dialing Burp at %s...", targetProxy)
+	proxyConn, dialErr := net.Dial("tcp", targetProxy)
+	if dialErr != nil {
+		log.Printf("[Relay] Failed to connect to proxy %s: %v", targetProxy, dialErr)
+		clientEp.Close()
 		return
 	}
 	log.Printf("[Relay] Dial to Burp SUCCESS")
 
-	r.Complete(true)
-
 	clientConn := gonet.NewTCPConn(queue, clientEp)
-
-	defer func() {
-		proxyConnErr := proxyConn.Close()
-		if proxyConnErr != nil {
-			return
-		}
-		clientConnErr := clientConn.Close()
-		if clientConnErr != nil {
-			return
-		}
-	}()
 
 	if h.wg != nil {
 		h.wg.Add(2)
