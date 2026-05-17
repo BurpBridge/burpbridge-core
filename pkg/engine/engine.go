@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -237,18 +238,27 @@ func (h *ForwarderHandler) HandleTCP(r *tcp.ForwarderRequest) {
 
 	log.Printf("[TCP] Intercepted connection intended for %s:%d", id.LocalAddress.String(), id.LocalPort)
 
-	// 2. Parse the base IP from the proxy string (e.g., "10.102.68.154:8080" -> "10.102.68.154")
-	host, _, err := net.SplitHostPort(h.proxyAddr)
-	if err != nil {
-		host = h.proxyAddr // Fallback just in case
+	// 2. Parse the IP:HTTP_PORT:HTTPS_PORT format
+	parts := strings.Split(h.proxyAddr, ":")
+	host := h.proxyAddr // Fallback
+	httpPort := "8080"
+	httpsPort := "8443"
+
+	if len(parts) >= 3 {
+		host = parts[0]
+		httpPort = parts[1]
+		httpsPort = parts[2]
+	} else if len(parts) >= 2 { // Backwards compatibility just in case
+		host = parts[0]
+		httpPort = parts[1]
 	}
 
-	// 3. Route to the correct Burp listener
+	// 3. Route to the correct Burp listener dynamically
 	var targetProxy string
 	if id.LocalPort == 80 {
-		targetProxy = net.JoinHostPort(host, "8080") // Plain HTTP
+		targetProxy = net.JoinHostPort(host, httpPort)
 	} else {
-		targetProxy = net.JoinHostPort(host, "8443") // HTTPS
+		targetProxy = net.JoinHostPort(host, httpsPort)
 	}
 
 	queue := &waiter.Queue{}
