@@ -1,206 +1,80 @@
 # Contributing to BurpBridge
 
-Thank you for your interest in contributing to BurpBridge!
+First-time contributors are welcome. Start with a [good first issue](https://github.com/BurpBridge/burpbridge-core/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22), comment that you would like to work on it, and ask for guidance if the scope is unclear. Documentation contributions are useful too.
 
-## Code of Conduct
+## Development setup
 
-We are committed to providing a welcoming and inclusive experience for everyone. Please be respectful and constructive in all interactions.
+Fork the repository, clone your fork, and create a topic branch. Install the Go version specified in `go.mod` (currently at least 1.25.5). Android NDK and Xcode are only needed for mobile library builds, not documentation or ordinary Go checks. See [DEVELOPMENT.md](DEVELOPMENT.md) for platform setup.
 
-## How to Contribute
-
-### Reporting Bugs
-
-1. Check if the issue already exists
-2. Create a detailed issue with:
-   - Clear title
-   - Steps to reproduce
-   - Expected vs actual behavior
-   - Environment details (Go version, OS, etc.)
-   - Relevant logs/output
-
-### Suggesting Features
-
-1. Open an issue with the `feature` label
-2. Describe the use case
-3. Explain the proposed solution
-4. Discuss potential alternatives
-
-### Pull Requests
-
-#### Workflow
-
-1. **Fork** the repository
-2. **Create** a feature branch:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-3. **Make** your changes
-4. **Test** your changes
-5. **Commit** using conventional commits:
-   ```bash
-   git commit -m "feat: add new feature"
-   ```
-6. **Push** to your fork:
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-7. **Submit** a Pull Request
-
-#### Pull Request Guidelines
-
-- Keep PRs focused and atomic
-- Include tests for new functionality
-- Update documentation as needed
-- Ensure all tests pass
-- Follow coding standards (see below)
-
-## Coding Standards
-
-### Go Formatting
-
-All code must be formatted with `gofmt`:
-
-```bash
-# Format all Go files
-gofmt -w ./...
-
-# Check formatting without writing
-gofmt -d ./
+```sh
+git switch -c docs/my-first-contribution
+go mod download
 ```
 
-### No Unused Code
+This repository contains the shared engine and a desktop harness. Native VPN applications are separate integrations. iOS packetFlow support is pending, UDP is not forwarded, and TCP interception currently accepts only ports 80 and 443.
 
-- Remove unused variables and functions
-- Use `_` for unused function parameters when required by interfaces
-- Build must complete without warnings
+## Every commit needs a DCO sign-off and a GPG signature
 
-### Resource Management
+By adding a `Signed-off-by` trailer, you certify the [Developer Certificate of Origin, version 1.1](https://developercertificate.org/). Read it before signing. The sign-off must match the commit author's name and email. Each person listed in a `Co-authored-by` trailer must also provide a matching sign-off; obtain their certification rather than signing on their behalf. There are no automatic bot exemptions.
 
-Always ensure proper resource cleanup:
+A DCO sign-off (`-s`) and a cryptographic GPG signature (`-S`) serve different purposes. Both are required on every commit introduced by your PR, including merge commits. GitHub must report each signature as verified and valid. SSH and S/MIME signatures do not satisfy this project's GPG policy.
 
-```go
-// Good: defer closing
-defer func() {
-    if err := conn.Close(); err != nil {
-        log.Printf("Error closing: %v", err)
-    }
-}()
+### Set up your identity and GPG key
+
+Use your own name and an email verified on your GitHub account. A verified GitHub noreply email can be used if it is also included in your GPG key.
+
+```sh
+git config user.name "Your Name"
+git config user.email "your-verified-email@example.com"
+gpg --full-generate-key
+gpg --list-secret-keys --keyid-format LONG
+gpg --armor --export YOUR_KEY_ID
 ```
 
-```go
-// Bad: no cleanup
-conn, _ := net.Dial(...)
-// ... code that might return early
+Add the exported **public** key to GitHub under Settings → SSH and GPG keys → New GPG key. Keep your private key private. Configure this clone:
+
+```sh
+git config gpg.format openpgp
+git config user.signingkey YOUR_KEY_ID
+git config commit.gpgsign true
+git config tag.gpgsign true
+export GPG_TTY=$(tty)
+git commit -s -S -m "docs: clarify desktop setup"
+git log -1 --show-signature
 ```
 
-### Error Handling
+The resulting commit message includes `Signed-off-by: Your Name <your-verified-email@example.com>`. After pushing, check the commit's Verified badge on GitHub. See GitHub's [GPG setup guide](https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key) and [commit signing guide](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits).
 
-Handle errors explicitly:
+### Repair your own topic-branch commits
 
-```go
-// Good
-if err != nil {
-    return fmt.Errorf("failed to do thing: %w", err)
-}
+For the latest commit, use `git commit --amend --no-edit -s -S`. For multiple commits you authored, use an interactive rebase against your branch's merge base, edit each affected commit, and amend it with `-s -S`. Rewriting a signed commit invalidates the previous signature, so sign it again. Do not add your own sign-off in place of another author's certification. Ask a maintainer for help with shared branches or merge commits.
 
-// Bad
-_ = someFunction() // ignoring error
+If your already-pushed topic branch was rewritten, push that branch with `git push --force-with-lease`. Never force-push the default branch. Changing the PR description or posting a DCO comment does not repair commit trailers.
+
+## Before opening a pull request
+
+Use a focused change and a descriptive title, preferably `fix: ...`, `docs: ...`, or `test: ...`. Explain the problem, resulting behavior, related issue, and validation. Add regression tests for behavior changes; documentation-only fixes do not need artificial tests.
+
+```sh
+git ls-files -z '*.go' | xargs -0 gofmt -w
+go build ./...
+go vet ./...
+go test -race ./...
+python3 -m unittest discover -s scripts/ci -p 'test_*.py'
 ```
 
-### Naming Conventions
+Keep PRs below 251 commits: GitHub's PR-commit endpoint returns at most 250, and the policy check fails closed rather than skipping commits. Avoid generated binaries, IDE settings, credentials, and unrelated formatting changes. Redact sensitive network details from logs.
 
-- Use meaningful variable names
-- Follow Go naming conventions (camelCase for variables, PascalCase for exported)
-- Add comments for exported functions
+## Review and merge policy
 
-### Logging
+The intended default-branch rules require `Go checks` and `DCO and GPG`, an up-to-date branch, at least one maintainer approval, resolved review conversations, and verified signed commits. New changes dismiss stale approvals and require approval from someone other than the last pusher. Direct pushes, force pushes, and branch deletion are blocked; no bypass actors are configured.
 
-- Use consistent log format: `[Component] Message`
-- Avoid logging sensitive data
-- Use appropriate log levels
+Maintainers should approve after checks pass and all feedback is resolved. GitHub enforces these requirements at **merge time**; it does not prevent someone from clicking Approve while checks are pending. The rules only become active when an administrator applies the configuration in [.github/MAINTAINERS.md](.github/MAINTAINERS.md).
 
-## Commit Message Convention
+Prefer a merge commit to preserve contributors' original GPG signatures and DCO trailers. A maintainer-created merge commit must also satisfy GitHub's signed-commit rule. When merging through GitHub, the merging maintainer must add their own matching `Signed-off-by` trailer to the merge message. Do not use squash or rebase merging to discard the audited commit history.
 
-We use [Conventional Commits](https://www.conventionalcommits.org/):
+## Reporting problems
 
-```
-<type>(<scope>): <description>
+Use the issue templates for bugs and features. Include reproduction steps, expected and actual behavior, platform, Go version, and redacted logs. Report exploitable vulnerabilities through GitHub's private security reporting feature if enabled; otherwise contact a maintainer privately rather than opening a public exploit report.
 
-[optional body]
-
-[optional footer]
-```
-
-### Types
-
-| Type | Description |
-|------|-------------|
-| `feat` | New feature |
-| `fix` | Bug fix |
-| `docs` | Documentation |
-| `style` | Code style (formatting) |
-| `refactor` | Code refactoring |
-| `test` | Tests |
-| `chore` | Maintenance |
-
-### Examples
-
-```bash
-# Feature
-git commit -m "feat(engine): add UDP relay support"
-
-# Bug fix
-git commit -m "fix(mobile): close connection on error path"
-
-# Documentation
-git commit -m "docs: update API documentation"
-```
-
-## Testing Requirements
-
-### Running Tests
-
-```bash
-# Run all tests
-go test ./...
-
-# Run tests with coverage
-go test -cover ./...
-
-# Run specific package
-go test ./pkg/engine/ -v
-```
-
-### Writing Tests
-
-- Add tests for new functionality
-- Follow existing test patterns
-- Name test files: `*_test.go`
-
-## Documentation
-
-- Update README.md for user-facing changes
-- Update DEVELOPMENT.md for process changes
-- Add code comments for complex logic
-- Document public API functions
-
-## Review Process
-
-1. Automated checks run (build, tests, lint)
-2. At least one maintainer reviews
-3. Address feedback promptly
-4. Once approved, maintainer merges
-
-## Getting Help
-
-- Open an issue for bugs/features
-- Join discussions in PRs
-- Check existing documentation
-
-## Recognition
-
-Contributors will be acknowledged in the project (with permission).
-
----
-
-*Thank you for contributing to BurpBridge!*
+Be respectful, explain disagreements constructively, and allow maintainers time to respond.
