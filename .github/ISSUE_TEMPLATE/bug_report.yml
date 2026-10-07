@@ -1,0 +1,24 @@
+name: Bug report
+description: Report a reproducible problem with the engine, bindings, or builds.
+labels: [bug]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include a minimal example and redact sensitive traffic.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, device, Go version, Burp listener configuration, and relevant redacted logs.
+    validations:
+      required: true

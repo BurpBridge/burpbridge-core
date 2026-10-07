@@ -1,0 +1,145 @@
+{
+  "repository": "BurpBridge/burpbridge-core",
+  "labels": [
+    {
+      "name": "bug",
+      "color": "d73a4a",
+      "description": "A defect in existing behavior"
+    },
+    {
+      "name": "enhancement",
+      "color": "a2eeef",
+      "description": "An improvement or new capability"
+    },
+    {
+      "name": "documentation",
+      "color": "0075ca",
+      "description": "Improve user or contributor documentation"
+    },
+    {
+      "name": "good first issue",
+      "color": "7057ff",
+      "description": "Small, well-scoped work for a first contribution"
+    },
+    {
+      "name": "help wanted",
+      "color": "008672",
+      "description": "Community contributions are welcome"
+    },
+    {
+      "name": "priority: high",
+      "color": "b60205",
+      "description": "Affects engine correctness or reliability"
+    }
+  ],
+  "issues": [
+    {
+      "slug": "tcp-completion",
+      "title": "Correct TCP forwarder completion so accepted connections are not reset",
+      "labels": [
+        "bug",
+        "priority: high",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:tcp-completion -->\n\n## Problem\n\nHandleTCP calls r.Complete(true) after CreateEndpoint succeeds. Upstream gVisor defines the argument as sendReset, despite the local comment describing acceptance. This finding comes from source review; verify against the pinned dependency.\n\n## Scope\n\nCorrect success and rejection handling, and verify bidirectional relay behavior. Keep unrelated routing changes out of this PR.\n\n## Acceptance criteria\n\n- [ ] Successful TCP handshakes do not trigger a reset.\n- [ ] Rejected requests have an explicit reset/drop policy.\n- [ ] An in-memory packet regression test covers the handshake and data transfer.\n- [ ] A local Burp smoke test is documented.\n\n## Where to start\n\npkg/engine/engine.go: ForwarderHandler.HandleTCP; gVisor pkg/tcpip/transport/tcp/forwarder.go. No privileged TUN should be needed for the regression test.\n"
+    },
+    {
+      "slug": "shutdown",
+      "title": "Make shutdown bounded and preserve TCP half-close behavior",
+      "labels": [
+        "bug",
+        "priority: high",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:shutdown -->\n\n## Problem\n\nStop waits for relay goroutines before closing the stack; relays do not observe cancellation. Idle connections can block shutdown. The engine does not close its TUN stream, repeated Stop can close a channel twice, and relay EOF closes the destination fully.\n\n## Scope\n\nDefine stream ownership, track and close active connections, cancel pending dials, make Stop idempotent, and preserve responses after a client finishes sending.\n\n## Acceptance criteria\n\n- [ ] Stop returns within a documented bound with idle connections.\n- [ ] Repeated/concurrent Stop is safe.\n- [ ] Owned descriptors and goroutines are released.\n- [ ] Half-close permits a complete server response.\n- [ ] Tests cover shutdown during dial, active transfer, idle relay, and half-close; race checks pass.\n\n## Where to start\n\npkg/engine/engine.go: Stop, TunLinkEndpoint.Close, HandleTCP, relayTCP; pkg/mobile/bind.go for descriptor ownership.\n"
+    },
+    {
+      "slug": "packet-failure",
+      "title": "Recover from malformed packets and expose terminal engine failures",
+      "labels": [
+        "bug",
+        "priority: high",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:packet-failure -->\n\n## Problem\n\nReadPacket errors terminate the dispatcher. A TUN read error exits readLoop without notifying the dispatcher. IsProxyRunning only checks whether a pointer exists, so a failed engine may appear healthy.\n\n## Scope\n\nSeparate invalid input packets from terminal transport failures and propagate terminal errors through engine lifecycle and mobile status.\n\n## Acceptance criteria\n\n- [ ] A malformed packet does not prevent processing a later valid packet.\n- [ ] TUN EOF/read errors wake blocked workers.\n- [ ] Wait or a documented status API exposes the failure.\n- [ ] Mobile running state reflects engine health.\n- [ ] Failure and shutdown tests pass with the race detector.\n\n## Where to start\n\npkg/engine/engine.go: readLoop, ReadPacket, startDispatcher, Wait; pkg/mobile/bind.go: IsProxyRunning.\n"
+    },
+    {
+      "slug": "routing-policy",
+      "title": "Define DNS, UDP, and nonstandard TCP routing behavior",
+      "labels": [
+        "enhancement",
+        "priority: high",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:routing-policy -->\n\n## Problem\n\nAll UDP and TCP ports other than 80/443 are currently unhandled. If a native VPN routes DNS into the engine, name resolution can fail before web interception begins. Proxy outbound traffic also needs a bypass route or Android socket protection.\n\n## Scope\n\nAgree on a documented interception/bypass/drop policy. Forward unsupported traffic through an appropriate bypass path or configure the native VPN to exclude it; do not send arbitrary UDP to Burp.\n\n## Acceptance criteria\n\n- [ ] DNS resolution works in the supported full-tunnel integration.\n- [ ] QUIC and nonstandard TCP ports have documented behavior.\n- [ ] Proxy connections cannot recursively enter the tunnel.\n- [ ] Android socket protection or bypass-route responsibilities are explicit.\n- [ ] Integration validation covers DNS and proxy reachability.\n\n## Where to start\n\npkg/engine/engine.go: HandleTCP and HandleUDP; CONTRIBUTING.md for repository scope. Native wrappers live outside this repository, so coordinate the contract with maintainers.\n"
+    },
+    {
+      "slug": "proxy-config",
+      "title": "Validate proxy listener configuration and support IPv6 addresses",
+      "labels": [
+        "bug",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:proxy-config -->\n\n## Problem\n\nHandleTCP parses proxyAddr using strings.Split on colon, which breaks IPv6 literals. A two-field host:8080 value selects port 8080 for HTTP and silently defaults HTTPS to 8443.\n\n## Scope\n\nDefine an unambiguous, backward-compatible configuration format; validate it once at startup rather than for every connection.\n\n## Acceptance criteria\n\n- [ ] IPv4, hostnames, and bracketed IPv6 literals are supported.\n- [ ] Invalid ports, malformed addresses, and empty hosts fail at startup.\n- [ ] HTTP and HTTPS listener selection is explicit and tested.\n- [ ] Documentation and desktop defaults agree with behavior.\n\n## Where to start\n\npkg/engine/engine.go: StartEngine and HandleTCP; cmd/desktop-tester/main.go; consider net.SplitHostPort and net.JoinHostPort.\n"
+    },
+    {
+      "slug": "ipv6-routing",
+      "title": "Complete IPv6 stack configuration and check initialization errors",
+      "labels": [
+        "bug",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:ipv6-routing -->\n\n## Problem\n\nIPv6 is registered, but the route table contains only IPv4EmptySubnet. The IPv6 address uses an empty address and AddProtocolAddress return values are ignored.\n\n## Scope\n\nProvide valid IPv6 initialization, an IPv6 route, and actionable handling of initialization errors. Verify packet framing in each adapter.\n\n## Acceptance criteria\n\n- [ ] IPv6 packets can establish a supported intercepted TCP connection and receive replies.\n- [ ] All address-registration errors are handled.\n- [ ] Tests exercise IPv4 and IPv6.\n- [ ] MTU/framing assumptions are documented.\n\n## Where to start\n\npkg/engine/engine.go: initStack, ReadPacket, and TunLinkEndpoint; native adapters should supply complete IP packets.\n"
+    },
+    {
+      "slug": "docs-scope",
+      "title": "Document actual interception scope and Burp listener defaults",
+      "labels": [
+        "documentation",
+        "good first issue",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:docs-scope -->\n\n## Problem\n\nREADME claims all traffic and TCP/UDP forwarding, but the code only intercepts TCP 80/443, drops UDP, and leaves iOS unimplemented. The examples show one Burp listener even though HTTPS defaults to 8443.\n\n## Scope\n\nUpdate the README overview, architecture labels, limitations, and listener examples to match current code. Do not change engine routing.\n\n## Acceptance criteria\n\n- [ ] README states TCP 80/443 only and no UDP relay.\n- [ ] iOS support is clearly marked pending.\n- [ ] HTTP 8080 and HTTPS 8443 defaults are explained.\n- [ ] Desktop loopback is distinguished from a Burp host reachable by a physical phone.\n- [ ] HTTPS certificate trust and pinning limitations link to official guidance.\n\n## Where to start\n\nREADME.md; pkg/engine/engine.go: HandleTCP and HandleUDP; pkg/mobile/bind.go: StartIOSProxy. This is documentation-only and needs no NDK, Xcode, or privileged TUN.\n\n## First-time contributor guidance\n\nComment if you would like to work on this. Maintainers can help you narrow the change and review an early draft. Keep the PR focused on this issue. Read CONTRIBUTING.md: every commit needs both a DCO sign-off and a GitHub-verified GPG signature (`git commit -s -S`).\n"
+    },
+    {
+      "slug": "docs-logging",
+      "title": "Remove the unsupported LOG_LEVEL instructions",
+      "labels": [
+        "documentation",
+        "good first issue",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:docs-logging -->\n\n## Problem\n\nDEVELOPMENT.md says LOG_LEVEL=debug enables verbose logs, but the engine uses the standard log package and never reads LOG_LEVEL.\n\n## Scope\n\nDescribe current unconditional logging and remove the ineffective command. Leave configurable logging for a separate feature.\n\n## Acceptance criteria\n\n- [ ] DEVELOPMENT.md no longer promises LOG_LEVEL support.\n- [ ] It describes where engine logs go.\n- [ ] Examples do not encourage sharing sensitive traffic unredacted.\n\n## Where to start\n\nDEVELOPMENT.md: Enable Logging; pkg/engine/engine.go: log.Printf calls. No runtime changes or platform SDKs are needed.\n\n## First-time contributor guidance\n\nComment if you would like to work on this. Maintainers can help you narrow the change and review an early draft. Keep the PR focused on this issue. Read CONTRIBUTING.md: every commit needs both a DCO sign-off and a GitHub-verified GPG signature (`git commit -s -S`).\n"
+    },
+    {
+      "slug": "ignore-os-files",
+      "title": "Ignore macOS .DS_Store files",
+      "labels": [
+        "enhancement",
+        "good first issue",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:ignore-os-files -->\n\n## Problem\n\n.DS_Store files currently appear as untracked files in the repository and pkg directory.\n\n## Scope\n\nAdd a repository-wide .DS_Store ignore rule. Do not delete user files or remove already tracked IDE files in this issue.\n\n## Acceptance criteria\n\n- [ ] git check-ignore .DS_Store pkg/.DS_Store reports both paths ignored.\n- [ ] Existing ignore rules remain intact.\n- [ ] The PR changes only .gitignore.\n\n## Where to start\n\n.gitignore. This requires only Git; no Go or mobile tools are needed.\n\n## First-time contributor guidance\n\nComment if you would like to work on this. Maintainers can help you narrow the change and review an early draft. Keep the PR focused on this issue. Read CONTRIBUTING.md: every commit needs both a DCO sign-off and a GitHub-verified GPG signature (`git commit -s -S`).\n"
+    },
+    {
+      "slug": "mobile-godoc",
+      "title": "Document the exported mobile binding API and current limitations",
+      "labels": [
+        "documentation",
+        "good first issue",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:mobile-godoc -->\n\n## Problem\n\nStartAndroidProxy, StartIOSProxy, StopProxy, and IsProxyRunning have no Go documentation comments, leaving descriptor ownership, synchronous errors, and status semantics unclear.\n\n## Scope\n\nAdd accurate exported-function comments based on the current implementation. Ask maintainers about intended descriptor ownership and clearly distinguish current behavior from future guarantees.\n\n## Acceptance criteria\n\n- [ ] Each exported function has a comment starting with its name.\n- [ ] StartIOSProxy is documented as returning an unimplemented error.\n- [ ] Duplicate-start and stop-without-start errors are explained.\n- [ ] IsProxyRunning is described as current instance presence, not a network health probe.\n- [ ] No new lifecycle guarantees are invented; gofmt passes.\n\n## Where to start\n\npkg/mobile/bind.go and CONTRIBUTING.md. This issue is comments-only; lifecycle fixes are separate.\n\n## First-time contributor guidance\n\nComment if you would like to work on this. Maintainers can help you narrow the change and review an early draft. Keep the PR focused on this issue. Read CONTRIBUTING.md: every commit needs both a DCO sign-off and a GitHub-verified GPG signature (`git commit -s -S`).\n"
+    },
+    {
+      "slug": "nil-stream",
+      "title": "Reject a nil packet stream before starting goroutines",
+      "labels": [
+        "bug",
+        "good first issue",
+        "help wanted"
+      ],
+      "body": "<!-- burpbridge-assessment:nil-stream -->\n\n## Problem\n\nStartEngine validates an empty proxy address but not a nil io.ReadWriteCloser. A nil stream can cause a background goroutine panic when readLoop starts.\n\n## Scope\n\nReject a literal nil stream at the public engine entry point with a clear error. Keep typed-nil reflection handling and wider lifecycle refactoring out of scope.\n\n## Acceptance criteria\n\n- [ ] StartEngine(nil, validProxyAddress) returns an error without starting goroutines.\n- [ ] A focused unit test covers the nil-stream error.\n- [ ] Existing empty-proxy validation remains covered.\n- [ ] gofmt, go vet, and go test pass.\n\n## Where to start\n\npkg/engine/engine.go: StartEngine; add pkg/engine/engine_test.go. Go 1.25.5+ is needed, but no privileged TUN, NDK, or Xcode.\n\n## First-time contributor guidance\n\nComment if you would like to work on this. Maintainers can help you narrow the change and review an early draft. Keep the PR focused on this issue. Read CONTRIBUTING.md: every commit needs both a DCO sign-off and a GitHub-verified GPG signature (`git commit -s -S`).\n"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+# Bot PRs must satisfy the same commit policy as human PRs.
+# Maintainers may need to recreate bot commits with their own DCO and GPG signature.
