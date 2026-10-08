@@ -75,6 +75,6 @@ Prefer a merge commit to preserve contributors' original GPG signatures and DCO 
 
 ## Reporting problems
 
-Use the issue templates for bugs and features. Include reproduction steps, expected and actual behavior, platform, Go version, and redacted logs. Report exploitable vulnerabilities through GitHub's private security reporting feature if enabled; otherwise contact a maintainer privately rather than opening a public exploit report.
+Use the issue templates for bugs and features. Include reproduction steps, expected and actual behavior, platform, Go version, and redacted logs. Report exploitable vulnerabilities through [private vulnerability reporting](https://github.com/BurpBridge/burpbridge-core/security/advisories/new); see [SECURITY.md](SECURITY.md).
 
-Be respectful, explain disagreements constructively, and allow maintainers time to respond.
+Follow the [code of conduct](CODE_OF_CONDUCT.md), explain disagreements constructively, and allow maintainers time to respond.
