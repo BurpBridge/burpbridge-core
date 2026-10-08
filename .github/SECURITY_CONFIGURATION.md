@@ -29,11 +29,12 @@ The scheduled/default-branch workflows start after this configuration is merged.
 
 ## Code scanning merge protection
 
-After successful CodeQL analysis, an administrator can add a `code_scanning`
-rule to the existing ruleset, requiring CodeQL, security alerts `high_or_higher`,
-and ordinary alerts `errors_and_warnings`, matching SkillGuard. Keep the existing
-rules and bypass policy intact. A required tool must actually be running; do not
-activate an unavailable check. Recheck the live ruleset after applying changes.
+The active ruleset now requires CodeQL results, security alerts
+`high_or_higher`, and ordinary alerts `errors_and_warnings`, matching SkillGuard.
+Successful analysis of this pull request was verified before enabling the rule.
+Keep the existing rules and bypass policy intact when updating the ruleset.
+Older disposable setup helpers may overwrite later manual rule additions; review
+the entire resulting ruleset before applying them again.
 
 ## Organization configuration
 
@@ -45,6 +46,7 @@ read access instead of copying OSSAfrica's default write access. Changes that
 remove member access, including enforcing two-factor authentication, need a
 membership impact review before rollout.
 
-GitHub Code Quality requires its own service configuration. A code-quality rule
-alone does not enable that service. CLI/container release automation from
+GitHub Code Quality has been enabled separately for Go and Python, with AI
+findings on pushes, matching SkillGuard. Its initial setup scan must succeed
+before adding the corresponding errors-only merge rule. CLI/container release automation from
 SkillGuard is omitted because this repository is a shared Go engine.
