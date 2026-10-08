@@ -47,6 +47,5 @@ remove member access, including enforcing two-factor authentication, need a
 membership impact review before rollout.
 
 GitHub Code Quality has been enabled separately for Go and Python, with AI
-findings on pushes, matching SkillGuard. Its initial setup scan must succeed
-before adding the corresponding errors-only merge rule. CLI/container release automation from
+findings on pushes, matching SkillGuard. Its initial setup scan passed, and an errors-only merge rule is active. CLI/container release automation from
 SkillGuard is omitted because this repository is a shared Go engine.
