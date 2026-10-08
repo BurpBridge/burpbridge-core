@@ -1,9 +1,16 @@
 version: 2
 updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels: [dependencies, go]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    labels: [dependencies, ci-cd]
 
-# Bot PRs must satisfy the same commit policy as human PRs.
-# Maintainers may need to recreate bot commits with their own DCO and GPG signature.
+# Bot PRs must satisfy the same DCO and GPG commit policy as human PRs.
+# Maintainers may need to recreate bot commits with their own certification.
